@@ -3,6 +3,7 @@ export interface User {
   email: string;
   role: "customer" | "staff" | "admin";
   name?: string;
+  token: string;
 }
 
 export interface MenuItem {

@@ -1,7 +1,7 @@
 import React, { createContext, useState, useEffect, ReactNode } from "react";
-import { createClient } from "@supabase/supabase-js";
 import { login, register } from "../api/authApi";
 import { User } from "../types";
+import axiosInstance from "../api/axiosInstance"; // Para buscar o role do usuário
 
 export interface AuthContextType {
   user: User | null;
@@ -14,11 +14,6 @@ export const AuthContext = createContext<AuthContextType | undefined>(
   undefined
 );
 
-const supabase = createClient(
-  process.env.REACT_APP_SUPABASE_URL!,
-  process.env.REACT_APP_SUPABASE_KEY!
-);
-
 interface AuthProviderProps {
   children: ReactNode;
 }
@@ -26,49 +21,77 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
 
-  useEffect(() => {
-    const session = supabase.auth.getSession();
-    session.then(({ data }) => {
-      if (data.session) {
-        setUser({
-          id: data.session.user.id,
-          email: data.session.user.email!,
-          role: "customer",
-        });
-        localStorage.setItem("token", data.session.access_token);
-      }
-    });
+  // Função para buscar o role do usuário autenticado
+  const fetchUserRole = async (token: string): Promise<string> => {
+    try {
+      const response = await axiosInstance.get("/users/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return response.data.data.role; // Assumindo que o backend retorna { data: { role: "..." } }
+    } catch (err) {
+      console.error("Failed to fetch user role:", err);
+      return "customer"; // Fallback para "customer" se falhar
+    }
+  };
 
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
-        setUser({
-          id: session.user.id,
-          email: session.user.email!,
-          role: "customer",
-        });
-        localStorage.setItem("token", session.access_token);
-      } else {
-        setUser(null);
-        localStorage.removeItem("token");
-      }
-    });
+  // Verificar sessão existente ao carregar
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      const initializeUser = async () => {
+        try {
+          const response = await axiosInstance.get("/users/me", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const userData = response.data.data;
+          setUser({
+            id: userData.id,
+            email: userData.email,
+            role: userData.role,
+            token,
+          });
+        } catch (err) {
+          console.error("Failed to initialize user:", err);
+          localStorage.removeItem("token");
+          setUser(null);
+        }
+      };
+      initializeUser();
+    }
   }, []);
 
   const loginUser = async (email: string, password: string) => {
     const token = await login(email, password);
-    const { data } = await supabase.auth.getUser(token);
-    setUser({ id: data.user!.id, email: data.user!.email!, role: "customer" });
+    const role = await fetchUserRole(token);
+    const userData: User = {
+      id: "",
+      email,
+      role: role as User["role"],
+      token,
+    };
+    // Buscar o ID do usuário (se não retornado diretamente pelo login)
+    const response = await axiosInstance.get("/users/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    userData.id = response.data.data.id;
+    setUser(userData);
     localStorage.setItem("token", token);
   };
 
   const registerUser = async (email: string, password: string) => {
     const userData = await register(email, password);
-    setUser({ id: userData.id, email, role: "customer" });
+    const role = await fetchUserRole(userData.token);
+    const newUser: User = {
+      id: userData.id,
+      email,
+      role: role as User["role"],
+      token: userData.token,
+    };
+    setUser(newUser);
     localStorage.setItem("token", userData.token);
   };
 
-  const logout = async () => {
-    await supabase.auth.signOut();
+  const logout = () => {
     setUser(null);
     localStorage.removeItem("token");
   };
